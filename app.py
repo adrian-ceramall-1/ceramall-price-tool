@@ -1,23 +1,25 @@
+import io
 import json
+import os
 import re
 import unicodedata
 import html as html_lib
-import os
 
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 
 st.set_page_config(page_title="Ceramall Price Tool", layout="wide")
 
 st.title("Ceramall Price Tool")
-st.write("Introdu un link de produs Ceramall si generam price tag PDF.")
+st.write("Introdu un link de produs Ceramall si generam price tag PDF / PNG pentru print.")
 
 
-COUNTRY_FLAGS = {
+COUNTRY_EMOJIS = {
     "uniunea europeana": "🇪🇺",
     "ue": "🇪🇺",
     "eu": "🇪🇺",
@@ -74,9 +76,11 @@ def is_yes(value):
     return value in ["da", "yes", "true", "1"]
 
 
-def flag_for_country(country):
-    key = normalize_key(country)
-    return COUNTRY_FLAGS.get(key, "")
+def country_flag_html(country):
+    emoji = COUNTRY_EMOJIS.get(normalize_key(country), "")
+    if not emoji:
+        return ""
+    return f'<span class="emoji flag-emoji">{emoji}</span>'
 
 
 def find_product_in_json(data):
@@ -257,7 +261,6 @@ def extract_product_data(product_url):
     )
 
     current_price, old_price = extract_prices(page_text, product_json)
-
     display_name = clean_display_name(name, sku)
 
     return {
@@ -275,6 +278,18 @@ def extract_product_data(product_url):
     }
 
 
+def launch_browser(playwright):
+    launch_kwargs = {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+    }
+
+    if os.path.exists("/usr/bin/chromium"):
+        launch_kwargs["executable_path"] = "/usr/bin/chromium"
+
+    return playwright.chromium.launch(**launch_kwargs)
+
+
 def build_price_template(data, tag_type, preview=False):
     name_clean = clean_text(data.get("name", ""))
     name = escape(name_clean)
@@ -284,12 +299,13 @@ def build_price_template(data, tag_type, preview=False):
     current_price = escape(data.get("current_price", ""))
     old_price = escape(data.get("old_price", ""))
     quality = escape(data.get("quality", "1"))
-    country = escape(data.get("country", ""))
+    country_raw = clean_text(data.get("country", ""))
+    country = escape(country_raw)
 
     porcelain_value = clean_text(data.get("porcelain", "Nu"))
     show_porcelain = is_yes(porcelain_value)
 
-    flag = flag_for_country(country)
+    country_flag = country_flag_html(country_raw)
 
     if tag_type == "Outlet":
         top_class = "top outlet"
@@ -316,7 +332,7 @@ def build_price_template(data, tag_type, preview=False):
         extra_items += f"""
             <div class="extra-item">
                 <div class="extra-label">țara de origine</div>
-                <div class="extra-value">{flag} {country}</div>
+                <div class="extra-value">{country_flag}{country}</div>
             </div>
         """
 
@@ -341,7 +357,7 @@ def build_price_template(data, tag_type, preview=False):
         gift_html = """
             <div class="gift-box">
                 <div class="gift-text">
-                    5m&sup2; = 1 SAC DE ADEZIV <span>CADOU! 🎁</span>
+                    5m&sup2; = 1 sac adeziv <span>CADOU!</span> <span class="emoji gift-emoji">🎁</span>
                 </div>
             </div>
         """
@@ -371,6 +387,11 @@ def build_price_template(data, tag_type, preview=False):
 
             * {{
                 box-sizing: border-box;
+            }}
+
+            html {{
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
             }}
 
             html, body {{
@@ -404,17 +425,36 @@ def build_price_template(data, tag_type, preview=False):
                 overflow: visible;
             }}
 
+            .emoji {{
+                font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+                font-style: normal !important;
+                font-weight: 400 !important;
+                line-height: 1;
+                display: inline-block;
+            }}
+
+            .flag-emoji {{
+                font-size: 10pt;
+                margin-right: 1mm;
+                vertical-align: -0.4mm;
+            }}
+
+            .gift-emoji {{
+                font-size: 11pt;
+                vertical-align: -0.4mm;
+            }}
+
             .top {{
                 height: 37mm;
                 padding: 7mm 9mm 5mm 9mm;
             }}
 
             .top.special {{
-                background: #9ccc6a;
+                background: #82d84b;
             }}
 
             .top.outlet {{
-                background: #f26a21;
+                background: #ff5b00;
             }}
 
             .offer {{
@@ -533,7 +573,7 @@ def build_price_template(data, tag_type, preview=False):
                 grid-template-columns: 1fr 1fr;
                 gap: 3mm 6mm;
                 margin-top: 5mm;
-                border-top: 0.4mm solid #ddd;
+                border-top: 0.4mm solid #d5d5d5;
                 padding-top: 3mm;
             }}
 
@@ -552,11 +592,14 @@ def build_price_template(data, tag_type, preview=False):
 
             .gift-box {{
                 margin-top: 5mm;
-                border-top: 0.4mm solid #ddd;
+                border-top: 0.4mm solid #d5d5d5;
                 padding-top: 3.5mm;
             }}
 
             .gift-text {{
+                display: flex;
+                align-items: center;
+                gap: 1.5mm;
                 font-size: 9pt;
                 line-height: 1.1;
                 font-weight: 900;
@@ -625,39 +668,43 @@ def build_price_template(data, tag_type, preview=False):
     return html
 
 
-def html_to_pdf_bytes(html):
+def html_to_png_bytes(html, dpi=300):
     with sync_playwright() as p:
-        launch_kwargs = {
-            "headless": True,
-            "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-        }
-
-        if os.path.exists("/usr/bin/chromium"):
-            launch_kwargs["executable_path"] = "/usr/bin/chromium"
-
-        browser = p.chromium.launch(**launch_kwargs)
-        page = browser.new_page(viewport={"width": 500, "height": 1800})
+        browser = launch_browser(p)
+        page = browser.new_page(
+            viewport={"width": 600, "height": 2600},
+            device_scale_factor=4,
+        )
         page.set_content(html, wait_until="networkidle")
 
-        box = page.locator(".sheet").bounding_box()
-        height_px = box["height"] if box else 340
-        height_mm = max(90, height_px * 25.4 / 96)
-
-        pdf_bytes = page.pdf(
-            width="90mm",
-            height=f"{height_mm}mm",
-            print_background=True,
-            margin={
-                "top": "0",
-                "right": "0",
-                "bottom": "0",
-                "left": "0",
-            },
-        )
+        raw_png = page.locator(".sheet").screenshot(type="png")
 
         browser.close()
 
-    return pdf_bytes
+    img = Image.open(io.BytesIO(raw_png)).convert("RGB")
+
+    target_width_px = round(90 / 25.4 * dpi)
+    ratio = target_width_px / img.width
+    target_height_px = round(img.height * ratio)
+
+    img = img.resize((target_width_px, target_height_px), Image.LANCZOS)
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG", dpi=(dpi, dpi), optimize=True)
+
+    return buffer.getvalue()
+
+
+def png_bytes_to_pdf_bytes(png_bytes, dpi=300):
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    buffer = io.BytesIO()
+    img.save(buffer, format="PDF", resolution=dpi)
+    return buffer.getvalue()
+
+
+def html_to_pdf_bytes(html, dpi=300):
+    png_bytes = html_to_png_bytes(html, dpi=dpi)
+    return png_bytes_to_pdf_bytes(png_bytes, dpi=dpi)
 
 
 if "product_data" not in st.session_state:
@@ -666,8 +713,14 @@ if "product_data" not in st.session_state:
 if "pdf_bytes" not in st.session_state:
     st.session_state.pdf_bytes = None
 
+if "png_bytes" not in st.session_state:
+    st.session_state.png_bytes = None
+
 if "pdf_name" not in st.session_state:
     st.session_state.pdf_name = "price-tag.pdf"
+
+if "png_name" not in st.session_state:
+    st.session_state.png_name = "price-tag.png"
 
 
 url = st.text_input(
@@ -682,6 +735,7 @@ if st.button("Extrage datele"):
         try:
             st.session_state.product_data = extract_product_data(url)
             st.session_state.pdf_bytes = None
+            st.session_state.png_bytes = None
             st.success("Date extrase cu succes.")
         except Exception as e:
             st.error(f"A aparut o eroare: {e}")
@@ -737,15 +791,15 @@ if st.session_state.product_data:
     preview_html = build_price_template(final_data, tag_type, preview=True)
     components.html(preview_html, height=1700, scrolling=True)
 
-    pdf_html = build_price_template(final_data, tag_type, preview=False)
+    render_html = build_price_template(final_data, tag_type, preview=False)
 
-    col_pdf1, col_pdf2 = st.columns([1, 2])
+    col_a, col_b, col_c = st.columns([1, 1, 2])
 
-    with col_pdf1:
+    with col_a:
         if st.button("Genereaza PDF"):
             try:
                 with st.spinner("Generez PDF..."):
-                    st.session_state.pdf_bytes = html_to_pdf_bytes(pdf_html)
+                    st.session_state.pdf_bytes = html_to_pdf_bytes(render_html, dpi=300)
                     safe_sku = sku or "produs"
                     safe_type = "outlet" if tag_type == "Outlet" else "oferta-speciala"
                     st.session_state.pdf_name = f"pretar-{safe_type}-{safe_sku}.pdf"
@@ -753,13 +807,33 @@ if st.session_state.product_data:
             except Exception as e:
                 st.error(f"Nu am putut genera PDF-ul: {e}")
 
-    with col_pdf2:
+    with col_b:
+        if st.button("Genereaza PNG print"):
+            try:
+                with st.spinner("Generez PNG 300 DPI..."):
+                    st.session_state.png_bytes = html_to_png_bytes(render_html, dpi=300)
+                    safe_sku = sku or "produs"
+                    safe_type = "outlet" if tag_type == "Outlet" else "oferta-speciala"
+                    st.session_state.png_name = f"pretar-{safe_type}-{safe_sku}-300dpi.png"
+                st.success("PNG generat.")
+            except Exception as e:
+                st.error(f"Nu am putut genera PNG-ul: {e}")
+
+    with col_c:
         if st.session_state.pdf_bytes:
             st.download_button(
                 label="Descarca PDF",
                 data=st.session_state.pdf_bytes,
                 file_name=st.session_state.pdf_name,
                 mime="application/pdf",
+            )
+
+        if st.session_state.png_bytes:
+            st.download_button(
+                label="Descarca PNG 300 DPI",
+                data=st.session_state.png_bytes,
+                file_name=st.session_state.png_name,
+                mime="image/png",
             )
 
     with st.expander("Date brute extrase"):
