@@ -357,8 +357,10 @@ def build_price_template(data, tag_type, preview=False):
         gift_html = """
             <div class="gift-box">
                 <div class="gift-text">
-                    5m&sup2; = 1 sac adeziv <span>CADOU!</span> <span class="emoji gift-emoji">🎁</span>
-                </div>
+    <span class="gift-normal">5m&sup2; = 1 sac adeziv</span>
+    <span class="gift-cadou">CADOU!</span>
+    <span class="emoji gift-emoji">🎁</span>
+</div>
             </div>
         """
 
@@ -596,21 +598,35 @@ def build_price_template(data, tag_type, preview=False):
                 padding-top: 3.5mm;
             }}
 
-            .gift-text {{
-                display: flex;
-                align-items: center;
-                gap: 1.5mm;
-                font-size: 9pt;
-                line-height: 1.1;
-                font-weight: 900;
-                color: #111;
-                white-space: nowrap;
-            }}
+ .gift-text {{
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 2mm;
+    text-align: center;
+    font-size: 9pt;
+    line-height: 1.1;
+    font-weight: 900;
+    color: #111;
+    white-space: nowrap;
+}}
 
-            .gift-text span {{
-                font-size: 9.5pt;
-                font-weight: 1000;
-            }}
+.gift-normal {{
+    font-size: 9pt;
+    font-weight: 900;
+}}
+
+.gift-cadou {{
+    font-size: 15pt;
+    font-weight: 1000;
+}}
+
+.gift-emoji {{
+    font-size: 18pt;
+    line-height: 1;
+    vertical-align: -0.8mm;
+}}
         </style>
     </head>
     <body class="{body_class}">
